@@ -1,7 +1,7 @@
 import pygame
 import numpy as np
 from math import cos, acos, sqrt, exp, sin
-from time import sleep, time
+from time import sleep, time, localtime
 from scipy import ndimage, sparse
 from cvxopt import matrix, solvers
 import osqp
@@ -323,23 +323,6 @@ class Voronoi2D():
                         break
             return checklist
 
-                # if np.shape(neighborhoods[i].phe)[0] == 1:
-
-                #     pt = list(np.array_split(neighborhoods[i].phe,1,1)[0][0][0:4])
-                #     pt.append(np.array_split(neighborhoods[i].phe,1,1)[0][0][0])
-                #     polygon = Polygon(pt)
-                # else:
-
-                #     pt = []
-                #     pt.append(np.array_split(self.phe,1,1)[0][0][0])
-                #     pt.extend(list(np.array_split(self.phe,1,1)[0][:,1]))
-                #     pt.append(np.array_split(self.phe,1,1)[0][np.shape(self.phe)[0]-1][2])
-                #     pt.extend(list(np.array_split(self.phe,1,1)[0][:,3]))
-                #     pt.append(np.array_split(self.phe,1,1)[0][0][0])
-                #     polygon = Polygon(pt)
-
-                # checklist.append(Polygon.contains(polygon, gemos))
-
         def TouchEdge(self):
 
             gemos = np.array([self.ltop, self.top, self.rtop])
@@ -615,12 +598,12 @@ def dynamicTarget(x, y):
     dx = np.random.uniform(-0.5, 0.5, 1)
     dy = np.random.uniform(-0.5, 0.5, 1)
 
-    return (float(np.clip(dx/3 + x, 0, 24)), float(np.clip(dy/3 + y, 0, 24)))
+    return (x, y)#(np.round(float(np.clip(dx/2 + x, 0, 24)),1), np.round(float(np.clip(dy/2 + y, 0, 24)),1))
 
 if __name__ == "__main__":
     pygame.init()
 
-    map_size = (24, 24)    
+    map_size = (20, 20)    
     grid_size = (0.1, 0.1)
 
     cameras = []
@@ -634,80 +617,30 @@ if __name__ == "__main__":
 
     cameras.append(camera0)
 
-    camera1 = { 'id'            :  1,
-                'position'      :  np.array([np.random.uniform(0.5,22), np.random.uniform(0.5,22)]),
-                'perspective'   :  np.array([0.7,1]),
-                'AngleofView'   :  20,
-                'range_limit'   :  4,
-                'lambda'        :  2,
-                'color'         : (0, 200, 0)}
-
-    cameras.append(camera1)
-
-    camera2 = { 'id'            :  2,
-                'position'      :  np.array([np.random.uniform(0.5,22), np.random.uniform(0.5,22)]),
-                'perspective'   :  np.array([0.7,1]),
-                'AngleofView'   :  20,
-                'range_limit'   :  5,
-                'lambda'        :  2,
-                'color'         : (0, 0, 200)}
-
-    cameras.append(camera2)
-
-    # camera3 = { 'id'            :  3,
+    # camera1 = { 'id'            :  1,
     #             'position'      :  np.array([np.random.uniform(0.5,22), np.random.uniform(0.5,22)]),
-    #             'perspective'   :  np.array([0.9,1]),
+    #             'perspective'   :  np.array([0.7,1]),
     #             'AngleofView'   :  20,
-    #             'range_limit'   :  5,
-    #             'lambda'        :  5,
-    #             'color'         : (200, 200, 0)}
+    #             'range_limit'   :  4,
+    #             'lambda'        :  2,
+    #             'color'         : (0, 200, 0)}
 
-    # cameras.append(camera3)
+    # cameras.append(camera1)
 
-    # camera4 = { 'id'            :  4,
+    # camera2 = { 'id'            :  2,
     #             'position'      :  np.array([np.random.uniform(0.5,22), np.random.uniform(0.5,22)]),
     #             'perspective'   :  np.array([0.7,1]),
     #             'AngleofView'   :  20,
     #             'range_limit'   :  5,
-    #             'lambda'        :  5,
-    #             'color'         : (0, 200, 200)}
+    #             'lambda'        :  2,
+    #             'color'         : (0, 0, 200)}
 
-    # cameras.append(camera4)
-
-    # camera5 = { 'id'            :  5,
-    #             'position'      :  np.array([np.random.uniform(0.5,22), np.random.uniform(0.5,22)]),
-    #             'perspective'   :  np.array([0,1]),
-    #             'AngleofView'   :  20,
-    #             'range_limit'   :  5,
-    #             'lambda'        :  5,
-    #             'color'         : (200, 0, 200)}
-
-    # cameras.append(camera5)
-
-    # camera6 = { 'id'            :  6,
-    #             'position'      :  np.array([np.random.uniform(0.5,22), np.random.uniform(0.5,22)]),
-    #             'perspective'   :  np.array([-1,0]),
-    #             'AngleofView'   :  20,
-    #             'range_limit'   :  5,
-    #             'lambda'        :  5,
-    #             'color'         : (100, 100, 200)}
-
-    # cameras.append(camera6)
-
-    # camera7 = { 'id'            :  7,
-    #             'position'      :  np.array([np.random.uniform(0.5,22), np.random.uniform(0.5,22)]),
-    #             'perspective'   :  np.array([0,-1]),
-    #             'AngleofView'   :  20,
-    #             'range_limit'   :  5,
-    #             'lambda'        :  5,
-    #             'color'         : (200, 100, 100)}
-
-    # cameras.append(camera7)
+    # cameras.append(camera2)
 
     size = (np.array(map_size) / np.array(grid_size)).astype(np.int64)
     event = np.zeros((size[0], size[1]))
 
-    target = [[(5, 5), 1, 10], [(17, 17), 1, 10], [(5, 17), 1, 10]] #target, certainty
+    target = [[(10, 11), 1, 10], [(8.5, 9), 1, 10], [(11.5, 9), 1, 10]] #target, certainty
     event1 = event_density(event, target, grid_size)    
     event_plt1 = ((event1 - event1.min()) * (1/(event1.max() - event1.min()) * 255)).astype('uint8')
 
@@ -715,37 +648,32 @@ if __name__ == "__main__":
 
     Done = False
     found = True
-    start = time()
+    last = time()
     cnt = [0 for i in range(len(target))]
+
     while not Done:
-        #last = time()
+
         for op in pygame.event.get():
+
             if op.type == pygame.QUIT:
+
                 Done = True
-        if not found:
-            found, cnt = voronoi.Update()
-        else:
-            event = np.zeros((size[0], size[1]))
-            for i in range(len(target)):
-                if i == np.argmax(cnt) and cnt[i] != 0:
-                    target[i][2] -= 0.5
-                    target[i][2] = np.clip(target[i][2], 1e-10, 100)
-                    print(i, "=>", target[i][2])
-                elif i == np.argmin(cnt) or cnt[i] == 0:
-                    target[i][2] += 0.5
-                    target[i][2] = np.clip(target[i][2], 1e-10, 100)
-                    print(i, "=>", target[i][2])
 
-            target = [[dynamicTarget(target[0][0][0], target[0][0][1]), 1, target[0][2]],
-                        [dynamicTarget(target[1][0][0], target[1][0][1]), 1, target[1][2]],
-                            [dynamicTarget(target[2][0][0], target[2][0][1]), 1, target[2][2]]]
-            event1 = event_density(event, target, grid_size) 
-            event_plt1 = ((event - event1.min()) * (1/(event1.max() - event1.min()) * 255)).astype('uint8')
-            found, cnt = voronoi.Update(event = event1, event_plt = event_plt1, target=target)
+            # print(time() - last)
 
-        print("===================", cnt, "====================")
-        #print(time() - last)
-        #print("Total Runtime: ", np.round(time() - start,2), "s")
-        #print("Single Runtime: ", np.round(((time() - start)/len(cameras)),2), "s")
-    
+            # target[0][0] = (target[0][0][0] + 0.0, target[0][0][1] + 0.2)
+            # target[1][0] = (target[0][0][0] - 0.2, target[0][0][1] + 0.2)
+            # target[2][0] = (target[0][0][0] + 0.2, target[0][0][1] + 0.2)
+
+            # sleep(0.1)
+
+        event = np.zeros((size[0], size[1]))
+
+        target = [[dynamicTarget(target[0][0][0], target[0][0][1]), 1, target[0][2]],
+                    [dynamicTarget(target[1][0][0], target[1][0][1]), 1, target[1][2]],
+                        [dynamicTarget(target[2][0][0], target[2][0][1]), 1, target[2][2]]]
+        event1 = event_density(event, target, grid_size) 
+        event_plt1 = ((event - event1.min()) * (1/(event1.max() - event1.min()) * 255)).astype('uint8')
+        found, cnt = voronoi.Update(event = event1, event_plt = event_plt1, target=target)
+
     pygame.quit()

@@ -7,6 +7,9 @@ from cvxopt import matrix, solvers
 import osqp
 from shapely.geometry import Point
 from shapely.geometry.polygon import Polygon
+import random
+from shapely.plotting import plot_polygon, plot_points
+import matplotlib.pyplot as plt
 
 class Voronoi2D():
     def __init__(self, map_size, grid_size, camera_num, \
@@ -22,14 +25,27 @@ class Voronoi2D():
             self.PTZs.append(ptz)
 
         self.event = event
+        self.ptz_tg = target
+        self.chk_l = len(target)
+        self.target_s = target
 
-    def Update(self, step = 0.3, event_plt = None, target = []): 
+    def Update(self, step = 0.5, event_plt = None, target = []):
 
         if len(target) > 0 :
+
             self.event_plt = event_plt
+            self.true_ep = event_plt
+            self.true_tg = target
+
             for i in range(self.camera_num):
-                self.PTZs[i].targets = target
-            
+
+                if self.chk_l != 3:
+
+                    self.PTZs[i].targets = self.target_s[i]
+                else:
+
+                    self.PTZs[i].targets = self.ptz_tg
+
         for ptz in self.PTZs:
             ptz.voronoi = []
             ptz.FoV = np.zeros(self.size)
@@ -38,6 +54,9 @@ class Voronoi2D():
         for i in range(self.camera_num):
             self.PTZs[i].UpdateVoronoi([self.PTZs[j].FoV \
                 for j in range(len(self.PTZs)) if j != i])
+
+        for i in range(self.camera_num):
+                self.PTZs[i].targets = target
 
         sum = 0
         area = 0
@@ -52,11 +71,42 @@ class Voronoi2D():
         # print("Covered Quality: ",sum)
         # print("Total Covered Area: ", area)        
 
-        self.map.Update(map_plt, self.PTZs, self.event_plt, target)
+        self.map.Update(map_plt, self.PTZs, self.true_ep, self.true_tg, self.ptz_tg)
+
+        self.target_s = []
 
         for i in range(self.camera_num):
-            self.PTZs[i].UpdateState([self.PTZs[j].pos \
-                for j in range(self.camera_num) if j != i], step)
+            self.ptz_tg, self.chk_l = self.PTZs[i].UpdateState([self.PTZs[j].pos \
+                for j in range(self.camera_num) if j != i], step, self.PTZs, self.true_tg)
+
+            if self.chk_l != 3:
+
+                self.target_s.append(self.ptz_tg)
+
+        # self.map.Update(map_plt, self.PTZs, self.true_ep, self.true_tg, self.ptz_tg)
+
+        # Calculatin Switch Quality
+        # if len(target) > 0 :
+
+        #     self.event_plt = event_plt
+        #     self.true_ep = event_plt
+
+        #     for i in range(self.camera_num):
+
+        #         self.PTZs[i].targets = [target[self.PTZs[i].switch_assigned]]
+
+        # for ptz in self.PTZs:
+        #     ptz.voronoi = []
+        #     ptz.FoV = np.zeros(self.size)
+        #     ptz.ComputeFoV()
+
+        # for i in range(self.camera_num):
+        #     self.PTZs[i].UpdateVoronoi([self.PTZs[j].FoV \
+        #         for j in range(len(self.PTZs)) if j != i])
+
+        # for i in range(self.camera_num):
+            
+        #     print("i: " + str(i) + ", Best One Quality: " + str(self.PTZs[i].quality))
 
         return cnt
 
@@ -65,6 +115,19 @@ class Voronoi2D():
         for i in range(len(arr)):
             sum += arr[i]**2
         return sqrt(sum)
+
+    def event_density(self, event, target, grid_size):
+
+        x = np.arange(event.shape[0])*grid_size[0]
+        for y_map in range(0, event.shape[1]):
+            y = y_map*grid_size[1]
+            density = 0
+            for i in range(len(target)):
+                density += target[i][2]*np.exp(-target[i][1]*np.linalg.norm(np.array([x,y], dtype=object)\
+                                -np.array((target[i][0][1],target[i][0][0]))))
+            event[:][y_map] = density
+
+        return 0 + event
     
     class PTZcamera():
         def __init__(self, properties, map_size, grid_size, targets, \
@@ -85,6 +148,7 @@ class Voronoi2D():
             self.stage = 1              # 1: Free player 2: Occupied Player 3: Cooperative player
             self.targets = targets
             self.target_assigned = -1
+            self.switch_assigned = -1
             self.FoV = np.zeros(self.size)
             self.Kv = Kv                # control gain for perspective control law toward voronoi cell
             self.Kvo = Kvo              # control gain for perspective control law toward overlap cell
@@ -92,12 +156,36 @@ class Voronoi2D():
             self.Kao = Kao              # control gain for zoom level control stems from overlap cell
             self.Kp = Kp                # control gain for positional change toward voronoi cell 
             self.event = np.zeros((self.size[0], self.size[1]))
+            self.top = 0
+            self.ltop = 0
+            self.rtop = 0
+            self.tar_oc = np.zeros(len(self.targets))
+            self.r = 0
+            self.center = 0
+            self.last_x = 0
+            self.last_y = 0
+            self.last_t = 0
 
-        def UpdateState(self, neighbors, step):
-            centroidal_forces = self.ComputeCentroidal(self.event)
+        def UpdateState(self, neighbors, step, neighborhoods, true_tg):
 
-            formation_force = self.FormationControl(neighbors)
-            self.TargetAssignment()
+            centroidal_forces, centroid = self.ComputeCentroidal(self.event)
+            
+            chk = self.Cluster_Formation()
+            self.targets, chk_l = self.Cluster_Tracking(chk)
+            self.TargetAssignment(neighborhoods, centroid)
+
+            event = np.zeros((size[0], size[1]))
+        
+            if self.target_assigned == -1:
+                
+                event1 = self.event_density(event, self.targets, grid_size)
+            else:
+                
+                event1 = self.event_density(event, [self.targets[self.target_assigned]], grid_size)
+                
+            self.event = event1
+
+            formation_force = self.FormationControl(neighbors, true_tg)
             control_input = self.CBF(centroidal_forces[0], formation_force, \
                                         centroidal_forces[1], stage = self.stage)
             
@@ -105,6 +193,10 @@ class Voronoi2D():
             self.perspective += control_input[1]*step
             self.perspective /= self.norm(self.perspective)
             self.alpha = self.alpha + centroidal_forces[2]*step
+
+            # print("Center Quality: " + str(self.quality) + "\n")
+
+            return self.targets, chk_l
 
         def CBF(self, translational_force = 0, formation_force = 0, rotational_force = 0,\
                     coe = 0.8, stage = 1):
@@ -121,7 +213,7 @@ class Voronoi2D():
                 # q = np.array([-2*ux, -2*uy])
                 # A = sparse.csc_matrix([[td[0], td[1]],[self.perspective[0], self.perspective[1]]])
                 # l = np.array([cos(self.alpha) - td@self.perspective, 0])
-                # u = np.array([np.inf, 0])
+                # u = np.array([0.1*np.pi, 0])
                 # # Create an OSQP object
                 # prob = osqp.OSQP()
 
@@ -134,6 +226,11 @@ class Voronoi2D():
                 # cl = np.array([ux, uy])
                 # n_p = (self.perspective+coe*cl)/self.norm(self.perspective+coe*cl)
                 # rotational_force = cl
+                # td = np.asarray(self.targets[self.target_assigned][0]) - self.pos
+                # td = td/self.norm(td)
+                # theta = acos(td@self.perspective)
+                # rotational_force = theta*np.array([0.5, 0.5])
+
                 res = translational_force + formation_force
 
                 return [res, rotational_force]
@@ -142,28 +239,183 @@ class Voronoi2D():
                 res = translational_force + formation_force
                 return [res, rotational_force]
 
-        def TargetAssignment(self):
-            score = -np.inf
-            self.target_assigned = -1
+        def event_density(self, event, target, grid_size):
+
+            x = np.arange(event.shape[0])*grid_size[0]
+            for y_map in range(0, event.shape[1]):
+                y = y_map*grid_size[1]
+                density = 0
+                for i in range(len(target)):
+                    density += target[i][2]*np.exp(-target[i][1]*np.linalg.norm(np.array([x,y], dtype=object)\
+                                    -np.array((target[i][0][1],target[i][0][0]))))
+                event[:][y_map] = density
+
+            return 0 + event
+
+        def Cluster_Formation(self):
+
+            checklist = np.zeros((len(self.targets), len(self.targets)))
+            threshold = 2.0
+
+            for i in range(len(self.targets)):
+
+                for j in range(len(self.targets)):
+
+                    if j != i:
+
+                        p1 = np.array([self.targets[i][0][0], self.targets[i][0][1]])
+                        p2 = np.array([self.targets[j][0][0], self.targets[j][0][1]])
+
+                        dist = self.norm(p1 - p2)
+
+                        if dist <= threshold:
+
+                            checklist[i][j] = 1
+                        else:
+
+                            checklist[i][j] = 0
+
+            return checklist
+
+        def Cluster_Tracking(self, chk):
+
+            count = 0
+            targets = []
+
+            for i in range(np.shape(chk)[0]):
+
+                nonindex = np.nonzero(chk[i][:])[0]
+
+                if i > 0:
+
+                    for j in nonindex:
+
+                        if j < i and i in np.nonzero(chk[j][:])[0]:
+
+                            if self.id == 0:
+
+                                pass
+                        else:
+
+                            c_x = 0.5*(self.targets[i][0][0] + self.targets[j][0][0])
+                            c_y = 0.5*(self.targets[i][0][1] + self.targets[j][0][1])
+
+                            targets.append([(c_x, c_y), 1, 10])
+
+                elif i == 0:
+
+                    for j in nonindex:
+                    
+                        c_x = 0.5*(self.targets[i][0][0] + self.targets[j][0][0])
+                        c_y = 0.5*(self.targets[i][0][1] + self.targets[j][0][1])
+
+                        targets.append([(c_x, c_y), 1, 10])
+
+            x = 0
+            y = 0
+
+            if len(targets) > 2:
+
+                for mem in targets:
+
+                    x += mem[0][0]
+                    y += mem[0][1]
+
+                if (x == self.last_x and y == self.last_y) or (self.last_x == 0 and self.last_y == 0):
+
+                    self.last_x = x
+                    self.last_y = y
+                    target_ = [[(x/3, y/3), 1, 10]]
+                else:
+
+                    target_ = [[(self.last_x/3, self.last_y/3), 1, 10]]
+                    self.last_t = target_
+            else:
+
+                target_ = self.last_t
+
+            cluster_quality = 0
+            best_quality = 0
+            score = np.inf
             pos = None
+            switch_target = None
+            self.switch_assigned = -1
 
-            for (target,i) in zip(self.targets,range(0,len(self.targets))):
-                q_res = self.ResolutionQuality(target[0][0], target[0][1])
-                q_per = self.PerspectiveQuality(target[0][0], target[0][1])
-                tmp = q_res*q_per if q_res > 0 and q_per > 0 else 0
-                if tmp > score and tmp > 0:
-                    score = tmp
-                    pos = (np.asarray(target[0])/self.grid_size).astype(np.int64)
-                    self.target_assigned = i
+            pt = [self.pos, self.ltop, self.top, self.rtop, self.pos]
+            polygon = Polygon(pt)
 
-            if pos is not None and np.any(np.all(pos == np.column_stack((self.voronoi[1],self.voronoi[0])), axis=1)):
-                self.stage = 2
+            for (target, i) in zip(self.targets, range(0,len(self.targets))):
+                
+                gemos = Point(target[0])
+
+                if polygon.is_valid and polygon.contains(gemos):
+
+                    event = np.zeros((size[0], size[1]))
+                    event1 = self.event_density(event, [target], self.grid_size)
+                    cluster_quality += np.sum(self.FoV*event1)
+
+                    # q_res = self.ResolutionQuality(target[0][0], target[0][1])
+                    # q_per = self.PerspectiveQuality(target[0][0], target[0][1])
+                    # tmp = q_res*q_per if q_res > 0 and q_per > 0 else 0
+            
+            print("Cluster Quality: " + str(cluster_quality))
+
+            if len(targets) != 3:
+
+                for (target, i) in zip(self.targets, range(0,len(self.targets))):
+
+                    p1 = np.array([target[0][0], target[0][1]])
+                    p2 = np.array([self.pos[0], self.pos[1]])
+
+                    dist = self.norm(p1 - p2)
+
+                    if dist < score and dist > 0:
+
+                        score = dist
+                        switch_target = target
+                        self.switch_assigned = i
+
+                if (cluster_quality < 4000) and self.switch_assigned != -1:
+
+                    target_ = [switch_target]
+
+                    event = np.zeros((size[0], size[1]))
+                    event1 = self.event_density(event, [switch_target], self.grid_size)
+                    best_quality = np.sum(self.FoV*event1)
+
+                    print("Best One Quality: " + str(best_quality))
+                    print(target_)
+
+            return target_, len(targets)
+
+        def TargetAssignment(self, neighborhoods, centroid):
+
+            # range_max = 0.85*(self.lamb + 1)/(self.lamb)*self.R*cos(self.alpha)
+            range_max = self.R*cos(self.alpha)
+
+            if centroid is not None:
+
+                range_local_best = (self.norm(np.asarray(centroid) - self.pos))
+                r = range_max*range_local_best/(range_max+range_local_best)\
+                            + range_local_best*range_max/(range_max+range_local_best)
+                if self.stage == 1:
+                    r = max(r, range_max - sqrt(1/(2*self.targets[self.target_assigned][1])))
             else:
-                self.stage = 1
+                r = self.R*cos(self.alpha)
 
-            print(self.id,"=>", self.target_assigned, "=>", score, "=>", self.stage)
+            tmp = 0
+            for i in range(len(self.targets)):
+                dist = self.norm(self.pos - np.asarray(self.targets[i][0]))
+                if dist <= r and -dist <= tmp:
+                    tmp = -dist
+                    self.target_assigned = i
+                    self.stage = 2
 
-        def FormationControl(self, neighbors):
+            self.r = r
+
+            print(self.id,"=>", self.target_assigned, "=>", self.stage, "\n")
+
+        def FormationControl(self, neighbors, true_tg):
             # TO-DO after Chinese New Year
             # Consider which neighbor is sharing the same target and only use them to obtain formation force
             neighbor_force = np.array([0.,0.])
@@ -173,17 +425,42 @@ class Voronoi2D():
             neighbor_norm = self.norm(neighbor_force)
 
             if self.stage == 2:
+
                 target_force = (np.asarray(self.targets[self.target_assigned][0]) - self.pos)\
                                 /(self.norm(np.asarray(self.targets[self.target_assigned][0])\
                                      - self.pos))
+
                 target_norm = self.norm(target_force)
+
+                center_force = (np.asarray(self.targets[self.target_assigned][0]) - self.pos)\
+                                /(self.norm(np.asarray(self.targets[self.target_assigned][0])\
+                                     - self.pos))
 
                 formation_force = (target_force*(neighbor_norm/(target_norm+neighbor_norm))\
                                     + neighbor_force*(target_norm/(target_norm+neighbor_norm)))
+
+                formation_force -= (center_force/self.norm(center_force))*(self.r - self.norm\
+                             (self.pos - np.asarray(self.targets[self.target_assigned][0])))
+
                 return formation_force
 
             else:
-                return neighbor_force
+                formation_force = neighbor_force
+                return formation_force
+
+        def polygon_FOV(self):
+
+            range_max = (self.lamb + 1)/(self.lamb)*self.R*cos(self.alpha)
+            R = np.array([[np.cos(self.alpha), -np.sin(self.alpha)]
+                        ,[np.sin(self.alpha), np.cos(self.alpha)]])
+
+            self.top = self.pos + range_max*self.perspective;
+
+            self.ltop = self.pos + range_max*np.reshape(R@np.reshape(self.perspective,(2,1)),(1,2));
+            self.ltop = self.ltop[0]
+
+            self.rtop = self.pos + range_max*np.reshape(np.linalg.inv(R)@np.reshape(self.perspective,(2,1)),(1,2));
+            self.rtop = self.rtop[0]
         
         def ComputeCentroidal(self, event):
             translational_force = np.array([0.,0.])
@@ -267,9 +544,9 @@ class Voronoi2D():
                                                 self.perspective[None,:]))@(v_V_o.reshape(2,1))
                 zoom -= -self.Kao*(self.alpha - alpha_v_o)
 
-            translational_force = translational_force
+            translational_force = translational_force if self.stage != 2 else 0
             return [translational_force, np.asarray([rotational_force[0][0], rotational_force[1][0]])\
-                        , zoom]
+                        , zoom], centroid
 
         def PerspectiveQuality(self, x, y):
             x_p = np.array([x,y], dtype=object) - self.pos
@@ -303,6 +580,8 @@ class Voronoi2D():
                                 min(int((self.pos[0] + range_max)/self.grid_size[0]), self.size[0])]\
                                     = quality_map
 
+            self.polygon_FOV()
+
         def UpdateVoronoi(self, FoVs):
             if self.stage == 1:
                 self.event = self.event_density(self.event, self.targets, self.grid_size) 
@@ -312,11 +591,14 @@ class Voronoi2D():
                 self.event_plt = ((self.event - self.event.min()) * (1/(self.event.max() - self.event.min()) * 255)).astype('uint8')
             
             quality_map = self.FoV
+
             for FoV in FoVs:
                 quality_map = np.where((quality_map > FoV), quality_map, 0)
 
-            self.quality = np.sum(quality_map*self.event)
-            self.voronoi = np.array(np.where((quality_map != 0) & (self.FoV != 0)))
+            # self.quality = np.sum(quality_map*self.event)
+            # self.voronoi = np.array(np.where((quality_map != 0) & (self.FoV != 0)))
+            self.voronoi = np.array(np.where((self.FoV != 0)))
+            self.quality = np.sum(self.FoV*self.event)
             self.overlap = np.array(np.where((quality_map == 0) & (self.FoV != 0)))
             self.map_plt = np.array(np.where(quality_map != 0, self.id + 1, 0))
 
@@ -327,6 +609,7 @@ class Voronoi2D():
             return sqrt(sum)
 
         def event_density(self, event, target, grid_size):
+
             x = np.arange(event.shape[0])*grid_size[0]
             for y_map in range(0, event.shape[1]):
                 y = y_map*grid_size[1]
@@ -352,7 +635,7 @@ class Voronoi2D():
                     pygame.draw.rect(self.display, (125,125,125), rect, 1)
             pygame.display.update()
 
-        def Update(self, map_plt, cameras, event, targets):
+        def Update(self, map_plt, cameras, event, targets, ptz_tg):
             x_map = 0
             for x in range(0, self.window_size[0], self.blockSize):
                 y_map = 0
@@ -381,9 +664,22 @@ class Voronoi2D():
                 pygame.draw.line(self.display, color, center, center + camera.perspective*R, 3)
                 pygame.draw.circle(self.display, color, camera.pos/self.grid_size*self.blockSize, 10)
 
+            for camera in cameras:
+
+                color = (camera.color[0]*0.5, camera.color[1]*0.5, camera.color[2]*0.5)
+                pygame.draw.polygon(self.display, color, [camera.pos/self.grid_size*self.blockSize, \
+                                                            camera.ltop/self.grid_size*self.blockSize, \
+                                                            camera.top/self.grid_size*self.blockSize, \
+                                                            camera.rtop/self.grid_size*self.blockSize], 2)
             for target in targets:
                 pygame.draw.circle(self.display, (0,0,0), np.asarray(target[0])/self.grid_size\
+                                    *self.blockSize, 6)
+
+            for tar in ptz_tg:
+
+                pygame.draw.circle(self.display, (100,100,100), np.asarray(tar[0])/self.grid_size\
                                     *self.blockSize, 3)
+
             pygame.draw.rect(self.display, (0, 0, 0), (0, 0, map_size[0]/grid_size[0]*self.blockSize, \
                                                         map_size[1]/grid_size[1]*self.blockSize), width = 3)
             pygame.display.flip()
@@ -415,12 +711,12 @@ def dynamicTarget(x, y):
 if __name__ == "__main__":
     pygame.init()
 
-    map_size = (24, 24)    
+    map_size = (20, 20)    
     grid_size = (0.1, 0.1)
 
     cameras = []
     camera0 = { 'id'            :  0,
-                'position'      :  np.array([np.random.uniform(0.5,22), np.random.uniform(0.5,22)]),
+                'position'      :  np.array([1., 8.]),
                 'perspective'   :  np.array([0.9,1]),
                 'AngleofView'   :  20,
                 'range_limit'   :  5,
@@ -429,82 +725,64 @@ if __name__ == "__main__":
 
     cameras.append(camera0)
 
-    # camera1 = { 'id'            :  1,
-    #             'position'      :  np.array([np.random.uniform(0.5,22), np.random.uniform(0.5,22)]),
-    #             'perspective'   :  np.array([0.7,1]),
-    #             'AngleofView'   :  20,
-    #             'range_limit'   :  5,
-    #             'lambda'        :  2,
-    #             'color'         : (0, 200, 0)}
+    camera1 = { 'id'            :  1,
+                'position'      :  np.array([1., 1.]),
+                'perspective'   :  np.array([0.7,1]),
+                'AngleofView'   :  20,
+                'range_limit'   :  5,
+                'lambda'        :  2,
+                'color'         : (0, 200, 0)}
 
-    # cameras.append(camera1)
+    cameras.append(camera1)
 
-    # camera2 = { 'id'            :  2,
-    #             'position'      :  np.array([np.random.uniform(0.5,22), np.random.uniform(0.5,22)]),
-    #             'perspective'   :  np.array([0.7,1]),
-    #             'AngleofView'   :  20,
-    #             'range_limit'   :  5,
-    #             'lambda'        :  2,
-    #             'color'         : (150, 100, 200)}
+    camera2 = { 'id'            :  2,
+                'position'      :  np.array([8., 1.]),
+                'perspective'   :  np.array([0.7,1]),
+                'AngleofView'   :  20,
+                'range_limit'   :  5,
+                'lambda'        :  2,
+                'color'         : (0, 0, 200)}
 
-    # cameras.append(camera2)
-
-    # camera3 = { 'id'            :  3,
-    #             'position'      :  np.array([np.random.uniform(0.5,22), np.random.uniform(0.5,22)]),
-    #             'perspective'   :  np.array([0,1]),
-    #             'AngleofView'   :  20,
-    #             'range_limit'   :  5,
-    #             'lambda'        :  2,
-    #             'color'         : (0, 100, 200)}
-
-    # cameras.append(camera3)
-
-    # camera4 = { 'id'            :  4,
-    #             'position'      :  np.array([np.random.uniform(0.5,22), np.random.uniform(0.5,22)]),
-    #             'perspective'   :  np.array([0,1]),
-    #             'AngleofView'   :  20,
-    #             'range_limit'   :  5,
-    #             'lambda'        :  2,
-    #             'color'         : (175, 150, 0)}
-
-    # cameras.append(camera4)
+    cameras.append(camera2)
 
     size = (np.array(map_size) / np.array(grid_size)).astype(np.int64)
     event = np.zeros((size[0], size[1]))
 
-    target = [[(15, 15), 1, 10], [(17, 17), 1, 10], [(13, 13), 1, 10]] #target, certainty
+    target = [[(10, 11), 1, 10], [(9.5, 10.0), 1, 10], [(10.5, 10.0), 1, 10]] #target, certainty
     event1 = event_density(event, target, grid_size)    
     event_plt1 = ((event1 - event1.min()) * (1/(event1.max() - event1.min()) * 255)).astype('uint8')
 
     voronoi = Voronoi2D(map_size, grid_size, len(cameras), cameras, np.ones(size), np.ones(size), target)
 
     Done = False
-    start = time()
-    cnt = [0 for i in range(len(target))]    
+    last = time()
+    cnt = [0 for i in range(len(target))]
+
     while not Done:
-        #last = time()
+
         for op in pygame.event.get():
+
             if op.type == pygame.QUIT:
                 Done = True
-        event = np.zeros((size[0], size[1]))
-        # for i in range(len(target)):
-        #     if i == np.argmax(cnt) and cnt[i] != 0:
-        #         target[i][2] -= 0.5
-        #         target[i][2] = np.clip(target[i][2], 1e-10, 100)
-        #     elif i == np.argmin(cnt) or cnt[i] == 0:
-        #         target[i][2] += 0.5
-        #         target[i][2] = np.clip(target[i][2], 1e-10, 100)
 
-        target = [[dynamicTarget(target[0][0][0], target[0][0][1]), 1, target[0][2]]]#,
-                   # [dynamicTarget(target[1][0][0], target[1][0][1]), 1, target[1][2]],
-                        # [dynamicTarget(target[2][0][0], target[2][0][1]), 1, target[2][2]]]
+        if np.round(time() - last, 2) > 30.00 and np.round(time() - last, 2) < 70.00:
+
+            target[0][0] = (target[0][0][0] + 0.00, target[0][0][1] + 0.01)
+            target[1][0] = (target[1][0][0] - 0.01, target[1][0][1] - 0.02)
+            target[2][0] = (target[2][0][0] + 0.03, target[2][0][1] - 0.04)
+            # target[0][0] = (1, 1)
+            # target[1][0] = (1, 1)
+            # target[2][0] = (1, 1)
+
+            sleep(0.001)
+
+        event = np.zeros((size[0], size[1]))
+
+        target = [[dynamicTarget(target[0][0][0], target[0][0][1]), 1, target[0][2]],
+                   [dynamicTarget(target[1][0][0], target[1][0][1]), 1, target[1][2]],
+                        [dynamicTarget(target[2][0][0], target[2][0][1]), 1, target[2][2]]]
         event1 = event_density(event, target, grid_size) 
         event_plt1 = ((event - event1.min()) * (1/(event1.max() - event1.min()) * 255)).astype('uint8')
         cnt = voronoi.Update(event_plt=event_plt1, target=target, step = 0.1)
-
-        print("===================", cnt, "====================")
-        #print(time() - last)
-        #print("Total Runtime: ", np.round(time() - start,2), "s")
-        #print("Single Runtime: ", np.round(((time() - start)/len(cameras)),2), "s")
     
     pygame.quit()
