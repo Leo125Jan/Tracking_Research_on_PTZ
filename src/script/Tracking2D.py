@@ -10,6 +10,8 @@ from shapely.geometry.polygon import Polygon
 import random
 from shapely.plotting import plot_polygon, plot_points
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+import csv
 
 class Voronoi2D():
     def __init__(self, map_size, grid_size, camera_num, \
@@ -39,12 +41,7 @@ class Voronoi2D():
 
             for i in range(self.camera_num):
 
-                if self.chk_l != 3:
-
-                    self.PTZs[i].targets = self.target_s[i]
-                else:
-
-                    self.PTZs[i].targets = self.ptz_tg
+                self.PTZs[i].targets = [self.target_s[i]]
 
         for ptz in self.PTZs:
             ptz.voronoi = []
@@ -71,7 +68,7 @@ class Voronoi2D():
         # print("Covered Quality: ",sum)
         # print("Total Covered Area: ", area)        
 
-        self.map.Update(map_plt, self.PTZs, self.true_ep, self.true_tg, self.ptz_tg)
+        self.map.Update(map_plt, self.PTZs, self.true_ep, self.true_tg, self.target_s)
 
         self.target_s = []
 
@@ -81,7 +78,9 @@ class Voronoi2D():
 
             if self.chk_l != 3:
 
-                self.target_s.append(self.ptz_tg)
+                self.target_s.extend(self.ptz_tg)
+            else:
+                self.target_s.extend(self.ptz_tg)
 
         # self.map.Update(map_plt, self.PTZs, self.true_ep, self.true_tg, self.ptz_tg)
 
@@ -165,13 +164,14 @@ class Voronoi2D():
             self.last_x = 0
             self.last_y = 0
             self.last_t = 0
+            self.cls_t = 0
 
         def UpdateState(self, neighbors, step, neighborhoods, true_tg):
 
             centroidal_forces, centroid = self.ComputeCentroidal(self.event)
             
             chk = self.Cluster_Formation()
-            self.targets, chk_l = self.Cluster_Tracking(chk)
+            self.targets, chk_l = self.Cluster_Tracking(chk, neighborhoods)
             self.TargetAssignment(neighborhoods, centroid)
 
             event = np.zeros((size[0], size[1]))
@@ -255,7 +255,8 @@ class Voronoi2D():
         def Cluster_Formation(self):
 
             checklist = np.zeros((len(self.targets), len(self.targets)))
-            threshold = 2.0
+            threshold = 2.3
+            self.cls_t = 0
 
             for i in range(len(self.targets)):
 
@@ -271,16 +272,18 @@ class Voronoi2D():
                         if dist <= threshold:
 
                             checklist[i][j] = 1
+                            self.cls_t += 1
                         else:
 
                             checklist[i][j] = 0
 
             return checklist
 
-        def Cluster_Tracking(self, chk):
+        def Cluster_Tracking(self, chk, neighborhoods):
 
             count = 0
             targets = []
+            nebi_chk = []
 
             for i in range(np.shape(chk)[0]):
 
@@ -313,10 +316,23 @@ class Voronoi2D():
 
             x = 0
             y = 0
+            score = np.inf
 
-            if len(targets) > 2:
+            for mem in neighborhoods:
 
-                for mem in targets:
+                nebi_chk.append(mem.cls_t)
+
+            if nebi_chk == [6, 0, 0] or nebi_chk == [6, 6, 0]:
+
+                nebi_chk = np.array([6, 6, 6])
+                nebi_chk = nebi_chk == 6
+            else:
+                nebi_chk = np.array(nebi_chk)
+                nebi_chk = nebi_chk == 6
+
+            if len(targets) == 3 and nebi_chk.all():
+
+                for mem in self.targets:
 
                     x += mem[0][0]
                     y += mem[0][1]
@@ -328,18 +344,23 @@ class Voronoi2D():
                     target_ = [[(x/3, y/3), 1, 10]]
                 else:
 
-                    target_ = [[(self.last_x/3, self.last_y/3), 1, 10]]
+                    target_ = [[(x/3, y/3), 1, 10]]
                     self.last_t = target_
             else:
 
-                target_ = self.last_t
+                for mem in self.targets:
+
+                    x += mem[0][0]
+                    y += mem[0][1]
+
+                target_ = [[(x/3, y/3), 1, 10]]
 
             cluster_quality = 0
             best_quality = 0
             score = np.inf
-            pos = None
             switch_target = None
             self.switch_assigned = -1
+            for_chk_one = []
 
             pt = [self.pos, self.ltop, self.top, self.rtop, self.pos]
             polygon = Polygon(pt)
@@ -352,39 +373,91 @@ class Voronoi2D():
 
                     event = np.zeros((size[0], size[1]))
                     event1 = self.event_density(event, [target], self.grid_size)
+                    event1 = np.transpose(event1)
                     cluster_quality += np.sum(self.FoV*event1)
-
-                    # q_res = self.ResolutionQuality(target[0][0], target[0][1])
-                    # q_per = self.PerspectiveQuality(target[0][0], target[0][1])
-                    # tmp = q_res*q_per if q_res > 0 and q_per > 0 else 0
             
-            print("Cluster Quality: " + str(cluster_quality))
+            # print("Cluster Quality: " + str(cluster_quality))
 
-            if len(targets) != 3:
+            if len(targets) != 3 and nebi_chk.all() == False:
 
-                for (target, i) in zip(self.targets, range(0,len(self.targets))):
+                if (cluster_quality <= 5060):
 
-                    p1 = np.array([target[0][0], target[0][1]])
-                    p2 = np.array([self.pos[0], self.pos[1]])
+                    if len(targets) == 2:
 
-                    dist = self.norm(p1 - p2)
+                        for mem in targets:
 
-                    if dist < score and dist > 0:
+                            p1 = np.array([mem[0][0], mem[0][1]])
+                            p2 = np.array([self.pos[0], self.pos[1]])
 
-                        score = dist
-                        switch_target = target
-                        self.switch_assigned = i
+                            dist = self.norm(p1 - p2)
 
-                if (cluster_quality < 4000) and self.switch_assigned != -1:
+                            if dist < score and dist > 0:
+
+                                score = dist
+                                target_ = [mem]
+
+                    if len(targets) == 1:
+
+                        for i in range(np.shape(chk)[0]):
+
+                            temp = chk[i,:]
+
+                            if (temp == 0).all():
+
+                                for_chk_one.append(self.targets[i])
+                                for_chk_one.extend(targets)
+                                break
+
+                        for mem in for_chk_one:
+
+                                p1 = np.array([mem[0][0], mem[0][1]])
+                                p2 = np.array([self.pos[0], self.pos[1]])
+
+                                dist = self.norm(p1 - p2)
+
+                                if dist < score and dist > 0:
+
+                                    score = dist
+                                    target_ = [mem]
+
+                    event = np.zeros((size[0], size[1]))
+                    event1 = self.event_density(event, target_, self.grid_size)
+                    event1 = np.transpose(event1)
+                    best_quality = np.sum(self.FoV*event1)
+
+                    # print("Best One Quality: " + str(best_quality))
+
+                score = np.inf
+                if (cluster_quality < 3300) or len(targets) == 0:
+
+                    for (target, i) in zip(self.targets, range(0,len(self.targets))):
+
+                        p1 = np.array([target[0][0], target[0][1]])
+                        p2 = np.array([self.pos[0], self.pos[1]])
+
+                        dist = self.norm(p1 - p2)
+
+                        if dist < score and dist > 0:
+
+                            score = dist
+                            switch_target = target
 
                     target_ = [switch_target]
 
                     event = np.zeros((size[0], size[1]))
                     event1 = self.event_density(event, [switch_target], self.grid_size)
+                    event1 = np.transpose(event1)
                     best_quality = np.sum(self.FoV*event1)
 
-                    print("Best One Quality: " + str(best_quality))
-                    print(target_)
+                    # print("Best One Quality: " + str(best_quality))
+
+            filename = "D:/Leo/IME/Paper Study/Coverage Control/Tracking_Research_on_PTZ-master/src/"
+            filename += "Data_" + str(self.id) + ".csv"
+            with open(filename, "a", encoding='UTF8', newline='') as f:
+
+                row = [cluster_quality]
+                writer = csv.writer(f)
+                writer.writerow(row)
 
             return target_, len(targets)
 
@@ -413,7 +486,7 @@ class Voronoi2D():
 
             self.r = r
 
-            print(self.id,"=>", self.target_assigned, "=>", self.stage, "\n")
+            # print(self.id,"=>", self.target_assigned, "=>", self.stage, "\n")
 
         def FormationControl(self, neighbors, true_tg):
             # TO-DO after Chinese New Year
@@ -608,19 +681,6 @@ class Voronoi2D():
                 sum += arr[i]**2
             return sqrt(sum)
 
-        def event_density(self, event, target, grid_size):
-
-            x = np.arange(event.shape[0])*grid_size[0]
-            for y_map in range(0, event.shape[1]):
-                y = y_map*grid_size[1]
-                density = 0
-                for i in range(len(target)):
-                    density += target[i][2]*np.exp(-target[i][1]*np.linalg.norm(np.array([x,y], dtype=object)\
-                                    -np.array((target[i][0][1],target[i][0][0]))))
-                event[:][y_map] = density
-
-            return 0 + event 
-
     class Map():
         def __init__(self, map_size, grid_size):
             self.size = (np.array(map_size) / np.array(grid_size)).astype(np.int64)
@@ -711,7 +771,7 @@ def dynamicTarget(x, y):
 if __name__ == "__main__":
     pygame.init()
 
-    map_size = (20, 20)    
+    map_size = (25, 25)    
     grid_size = (0.1, 0.1)
 
     cameras = []
@@ -748,7 +808,7 @@ if __name__ == "__main__":
     size = (np.array(map_size) / np.array(grid_size)).astype(np.int64)
     event = np.zeros((size[0], size[1]))
 
-    target = [[(10, 11), 1, 10], [(9.5, 10.0), 1, 10], [(10.5, 10.0), 1, 10]] #target, certainty
+    target = [[(6.5, 19), 1, 10], [(6.0, 18.0), 1, 10], [(7.0, 18.0), 1, 10]] #target, certainty
     event1 = event_density(event, target, grid_size)    
     event_plt1 = ((event1 - event1.min()) * (1/(event1.max() - event1.min()) * 255)).astype('uint8')
 
@@ -758,6 +818,14 @@ if __name__ == "__main__":
     last = time()
     cnt = [0 for i in range(len(target))]
 
+    for i in range(len(cameras)):
+
+        filename = "D:/Leo/IME/Paper Study/Coverage Control/Tracking_Research_on_PTZ-master/src/"
+        filename += "Data_" + str(i) + ".csv"
+
+        f = open(filename, "w+")
+        f.close()
+
     while not Done:
 
         for op in pygame.event.get():
@@ -765,14 +833,29 @@ if __name__ == "__main__":
             if op.type == pygame.QUIT:
                 Done = True
 
-        if np.round(time() - last, 2) > 30.00 and np.round(time() - last, 2) < 70.00:
+        if np.round(time() - last, 2) > 40.00 and np.round(time() - last, 2) < 80.00:
 
             target[0][0] = (target[0][0][0] + 0.00, target[0][0][1] + 0.01)
             target[1][0] = (target[1][0][0] - 0.01, target[1][0][1] - 0.02)
             target[2][0] = (target[2][0][0] + 0.03, target[2][0][1] - 0.04)
-            # target[0][0] = (1, 1)
-            # target[1][0] = (1, 1)
-            # target[2][0] = (1, 1)
+            # target[0][0] = (10, 14)
+            # target[1][0] = (7, 7)
+            # target[2][0] = (13, 6)
+
+            sleep(0.001)
+        elif np.round(time() - last, 2) > 70.00 and np.round(time() - last, 2) < 130:
+
+            target[0][0] = (target[0][0][0] + 0.06, target[0][0][1] - 0.01)
+            target[1][0] = (target[1][0][0] + 0.008, target[1][0][1] - 0.05)
+            target[2][0] = (target[2][0][0] + 0.03, target[2][0][1] - 0.03)
+
+            sleep(0.001)
+
+        elif np.round(time() - last, 2) > 130.00 and np.round(time() - last, 2) < 180:
+
+            target[0][0] = (target[0][0][0] + 0.008, target[0][0][1] - 0.07)
+            target[1][0] = (target[1][0][0] + 0.065, target[1][0][1] - 0.008)
+            target[2][0] = (target[2][0][0] + 0.015, target[2][0][1] - 0.015)
 
             sleep(0.001)
 
